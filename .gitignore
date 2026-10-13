@@ -1,0 +1,6 @@
+# Chiavi private: mai in git
+demo/keys/
+__pycache__/
+*.pyc
+.DS_Store
+.venv-pptx/

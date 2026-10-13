@@ -1,0 +1,48 @@
+# Example 1b — the gate fails, so nothing gets signed.
+#
+# Same as example 1, but pushed on the `scan-fail` branch with the vulnerable
+# Dockerfile from team/app/vulnerable/. The Trivy gate fails the `scan` task, so
+# the `promote` task never runs, so the artifact is never declared to Tekton
+# Chains — and Chains has nothing to sign, even though buildkit already pushed
+# the image to the registry.
+#
+#   make example-1b    pushes this file and follows the run
+#
+# BUNDLE_REF and ZOT_HOST are substituted by demo/scripts/example.sh.
+apiVersion: tekton.dev/v1
+kind: PipelineRun
+metadata:
+  name: release-scan-fail
+  annotations:
+    pipelinesascode.tekton.dev/on-event: "[push]"
+    pipelinesascode.tekton.dev/on-target-branch: "[scan-fail]"
+spec:
+  pipelineRef:
+    resolver: bundles
+    params:
+      - name: bundle
+        value: BUNDLE_REF
+      - name: name
+        value: go-service
+      - name: kind
+        value: Pipeline
+  params:
+    - name: repo-url
+      value: "{{ repo_url }}"
+    - name: revision
+      value: "{{ revision }}"
+    - name: image
+      value: ZOT_HOST/team/app
+  workspaces:
+    - name: source
+      volumeClaimTemplate:
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 1Gi
+    - name: git-auth
+      secret:
+        secretName: team-git-auth
+  taskRunTemplate:
+    serviceAccountName: team-app

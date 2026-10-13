@@ -1,0 +1,75 @@
+# Entitlement at admission: which bundles a PipelineRun may reference.
+# Native ValidatingAdmissionPolicy (GA since Kubernetes 1.30) — no Kyverno.
+#
+# Two validations, both on the bundle parameter:
+#   1. only the platform repository is a source at all
+#   2. and of it, only the exact digest the platform approved — the one Tekton
+#      Chains signed when the publisher pushed it (`make trust` checks that
+#      signature with cosign; at admission we compare the digest).
+#
+# ZOT_HOST and APPROVED_BUNDLE are substituted by scripts/policies.sh.
+#
+# Two bindings, on purpose:
+#   ...-warn  -> the object IS created, the client gets a warning
+#   ...-deny  -> the request is rejected at admission: no PipelineRun exists, so
+#                nothing appears in the Dashboard (PaC reports it on the commit)
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: tekton-bundle-entitlement
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["tekton.dev"]
+        apiVersions: ["v1"]
+        # CREATE only, on purpose. Entitlement is about admitting a new run, and
+        # a policy that also matches UPDATE traps runs: Tekton and Chains update
+        # PipelineRuns continuously (status, finalizers), so a run whose bundle
+        # is not the approved digest would be denied its own finalizer removal
+        # and sit in Terminating forever. Deletion is not policed either.
+        operations: ["CREATE"]
+        resources: ["pipelineruns"]
+  validations:
+    # Short-circuit `||` keeps CEL from evaluating the right side when the
+    # resolver is not `bundles` (CRDs get no type checking, so optional
+    # access is required).
+    - expression: |
+        object.spec.?pipelineRef.?resolver.orValue('') != 'bundles' ||
+        object.spec.pipelineRef.params.exists(p,
+          p.?name.orValue('') == 'bundle' &&
+          p.?value.orValue('').startsWith('ZOT_HOST/platform/'))
+      message: "bundle non ammesso: solo i bundle pubblicati dalla piattaforma (ZOT_HOST/platform/) possono essere referenziati"
+      reason: Forbidden
+    - expression: |
+        object.spec.?pipelineRef.?resolver.orValue('') != 'bundles' ||
+        object.spec.pipelineRef.params.exists(p,
+          p.?name.orValue('') == 'bundle' &&
+          p.?value.orValue('') == 'APPROVED_BUNDLE')
+      message: "bundle non approvato: la piattaforma ha approvato solo APPROVED_BUNDLE_SHORT (firmato da Tekton Chains)"
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: tekton-bundle-entitlement-warn
+spec:
+  policyName: tekton-bundle-entitlement
+  validationActions: ["Warn", "Audit"]
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        platform.demo/team: "true"
+---
+# The hard block. Enable it for scenarios 2 and 3 (make policies-deny).
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: tekton-bundle-entitlement-deny
+spec:
+  policyName: tekton-bundle-entitlement
+  validationActions: ["Deny"]
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        platform.demo/team: "true"

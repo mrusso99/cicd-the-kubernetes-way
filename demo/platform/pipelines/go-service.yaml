@@ -1,0 +1,242 @@
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: go-service
+  labels:
+    platform.demo/template: go-service
+spec:
+  description: >-
+    Golden path: clone, build and push with rootless buildkit, gate on a Trivy
+    scan, generate the SBOM, and only then declare the artifact to Tekton Chains.
+    Published as a signed OCI bundle: every task is embedded, so the bundle
+    signature covers the whole chain.
+
+    The verdict is the security property. Chains signs artifacts that a run
+    *declares* through the type-hint results named IMAGE_URL / IMAGE_DIGEST, and
+    it signs completed runs whether they succeeded or not. Here only the last
+    task, `promote`, declares them, and it is conditioned on `SCAN_GATE=passed`:
+    nothing declares the artifact without a positive verdict, so Chains has
+    nothing to sign — whatever the exit status of the run.
+  params:
+    - name: repo-url
+      type: string
+    - name: revision
+      type: string
+      default: main
+    - name: image
+      type: string
+      description: Full image ref to build and push (registry/repo, no tag)
+  workspaces:
+    - name: source
+    - name: git-auth
+      description: Secret workspace with .git-credentials / .gitconfig
+  results:
+    # Chains type hints. Produced by `promote`, i.e. only after the gate passed.
+    - name: IMAGE_URL
+      value: $(tasks.promote.results.IMAGE_URL)
+    - name: IMAGE_DIGEST
+      value: $(tasks.promote.results.IMAGE_DIGEST)
+    - name: SCAN_GATE
+      value: $(tasks.scan.results.SCAN_GATE)
+  tasks:
+    - name: clone
+      workspaces:
+        - name: output
+          workspace: source
+        - name: git-auth
+          workspace: git-auth
+      params:
+        - name: url
+          value: $(params.repo-url)
+        - name: revision
+          value: $(params.revision)
+      taskSpec:
+        params:
+          - name: url
+          - name: revision
+        workspaces:
+          - name: output
+          - name: git-auth
+        steps:
+          - name: clone
+            image: alpine/git:2.47.2
+            workingDir: $(workspaces.output.path)
+            script: |
+              #!/bin/sh
+              set -eu
+              # the build's git identity comes from a secret, not from PaC's token
+              cp "$(workspaces.git-auth.path)/.git-credentials" /root/.git-credentials
+              cp "$(workspaces.git-auth.path)/.gitconfig" /root/.gitconfig
+              git clone "$(params.url)" src
+              cd src
+              git checkout "$(params.revision)"
+              git log -1 --format='cloned %H as %an'
+
+    - name: build
+      runAfter: [clone]
+      workspaces:
+        - name: source
+          workspace: source
+      params:
+        - name: image
+          value: $(params.image)
+      taskSpec:
+        params:
+          - name: image
+        workspaces:
+          - name: source
+        results:
+          # Deliberately NOT named IMAGE_URL / IMAGE_DIGEST: a result with those
+          # names is a promise to Tekton Chains, and the build has not been
+          # checked yet.
+          - name: BUILT_REF
+          - name: BUILT_DIGEST
+        steps:
+          - name: build-push
+            # daemonless rootless buildkit: one pod, no separate daemon
+            image: moby/buildkit:v0.19.0-rootless
+            workingDir: $(workspaces.source.path)/src
+            securityContext:
+              seccompProfile: { type: Unconfined }
+              appArmorProfile: { type: Unconfined }
+              runAsUser: 1000
+              runAsGroup: 1000
+            script: |
+              #!/bin/sh
+              set -eu
+              # Without a process sandbox: the rootless buildkit worker cannot
+              # mount /proc inside an unprivileged pod, so runc fails. The build
+              # steps run unsandboxed; the isolation that matters here is the pod.
+              export BUILDKITD_FLAGS="--oci-worker-no-process-sandbox --oci-worker-snapshotter=native"
+              buildctl-daemonless.sh build \
+                --frontend dockerfile.v0 \
+                --local context=. \
+                --local dockerfile=. \
+                --opt filename=Dockerfile \
+                --output type=image,name=$(params.image),push=true,registry.insecure=true,oci-mediatypes=true \
+                --metadata-file /tmp/meta.json
+              printf '%s' "$(params.image)" > /tekton/results/BUILT_REF
+              digest=$(sed -n 's/.*"containerimage.digest": *"\([^"]*\)".*/\1/p' /tmp/meta.json)
+              [ -n "$digest" ] || { echo "FATAL: no digest in buildkit metadata"; exit 1; }
+              printf '%s' "$digest" > /tekton/results/BUILT_DIGEST
+              echo "pushed $(params.image)@$digest"
+
+    - name: scan
+      runAfter: [build]
+      workspaces:
+        - name: source
+          workspace: source
+      params:
+        - name: image
+          value: $(tasks.build.results.BUILT_REF)
+        - name: digest
+          value: $(tasks.build.results.BUILT_DIGEST)
+      taskSpec:
+        params:
+          - name: image
+          - name: digest
+        workspaces:
+          - name: source
+        results:
+          - name: SCAN_GATE
+            description: >-
+              The Trivy verdict. `promote` declares the artifact to Tekton Chains
+              only when this is "passed": the signature depends on the verdict,
+              not on where the task sits in the DAG.
+        steps:
+          - name: trivy
+            image: aquasec/trivy:0.58.1
+            workingDir: $(workspaces.source.path)
+            script: |
+              #!/bin/sh
+              set -eu
+              ref="$(params.image)@$(params.digest)"
+              # The verdict is written in both branches: a result written before a
+              # step fails is still published by Tekton, so a red gate leaves a
+              # trace on the run — and it is the value `promote` is conditioned on.
+              if trivy image --insecure --quiet --exit-code 1 \
+                   --severity CRITICAL,HIGH --ignore-unfixed "$ref"; then
+                printf 'passed' > /tekton/results/SCAN_GATE
+              else
+                printf 'failed' > /tekton/results/SCAN_GATE
+                # the gate still fails the run: visible in the Dashboard and on the commit
+                exit 1
+              fi
+              # kept for inspection; the gate above is what fails the run
+              trivy image --insecure --quiet --format json --output trivy-report.json "$ref"
+              echo "scan gate passed for $ref"
+
+    - name: sbom
+      runAfter: [scan]
+      workspaces:
+        - name: source
+          workspace: source
+      params:
+        - name: image
+          value: $(tasks.build.results.BUILT_REF)
+        - name: digest
+          value: $(tasks.build.results.BUILT_DIGEST)
+      taskSpec:
+        params:
+          - name: image
+          - name: digest
+        workspaces:
+          - name: source
+        steps:
+          - name: generate
+            image: aquasec/trivy:0.58.1
+            workingDir: $(workspaces.source.path)
+            script: |
+              #!/bin/sh
+              set -eu
+              trivy image --insecure --quiet --format cyclonedx \
+                --output sbom.cdx.json "$(params.image)@$(params.digest)"
+              echo "SBOM: $(wc -c < sbom.cdx.json) bytes"
+          - name: attach
+            image: ghcr.io/oras-project/oras:v1.2.0
+            workingDir: $(workspaces.source.path)
+            script: |
+              #!/bin/sh
+              set -eu
+              # attached UNSIGNED: informational, not attested (see README)
+              oras attach --plain-http \
+                --artifact-type application/vnd.cyclonedx+json \
+                "$(params.image)@$(params.digest)" \
+                sbom.cdx.json:application/vnd.cyclonedx+json
+
+    - name: promote
+      runAfter: [sbom]
+      when:
+        # The condition that makes the scan the gate. Without a positive verdict
+        # this task is skipped, so nothing declares the artifact and Tekton Chains
+        # has no subject to sign — la posizione nel DAG è una conseguenza, non il
+        # meccanismo.
+        - input: $(tasks.scan.results.SCAN_GATE)
+          operator: in
+          values: ["passed"]
+      params:
+        - name: image
+          value: $(tasks.build.results.BUILT_REF)
+        - name: digest
+          value: $(tasks.build.results.BUILT_DIGEST)
+      taskSpec:
+        description: >-
+          The only task that produces the Chains type-hint results. It runs only
+          on a positive Trivy verdict: no verdict, no declaration, no signature.
+        params:
+          - name: image
+          - name: digest
+        results:
+          - name: IMAGE_URL
+            description: Chains type hint — the artifact this run produced
+          - name: IMAGE_DIGEST
+            description: Chains type hint — the digest of that artifact
+        steps:
+          - name: declare
+            image: alpine:3.20
+            script: |
+              #!/bin/sh
+              set -eu
+              printf '%s' "$(params.image)"  > "$(results.IMAGE_URL.path)"
+              printf '%s' "$(params.digest)" > "$(results.IMAGE_DIGEST.path)"
+              echo "declared to Tekton Chains: $(params.image)@$(params.digest)"

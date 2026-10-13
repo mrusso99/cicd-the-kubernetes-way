@@ -1,0 +1,15 @@
+# A Task the platform signs, so the control plane can verify it before running.
+#
+# v1beta1 on purpose: the tkn signing CLI only handles v1beta1 (upstream closed
+# `support v1 for sign and verify` as not planned, cli#2214). A v1 resource
+# cannot be signed with the official tooling at all.
+apiVersion: tekton.dev/v1beta1
+kind: Task
+metadata:
+  name: hello
+spec:
+  steps:
+    - name: echo
+      image: alpine:3.20
+      command: ["/bin/sh", "-c"]
+      args: ["echo hello from a task the platform signed"]

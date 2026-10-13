@@ -1,0 +1,41 @@
+# The platform's publisher.
+#
+# It runs in the cluster, on Tekton, and it reports the digest of what it pushed
+# through the IMAGE_URL / IMAGE_DIGEST type hints. It does NOT sign anything: the
+# signature is produced by Tekton Chains, from the control plane, with a key this
+# task never sees. The registry is the only thing this task talks to.
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: publish-bundle
+  namespace: platform
+spec:
+  description: Push a Tekton resource as an OCI bundle and report its digest.
+  params:
+    - name: registry
+      description: Registry host, without scheme
+    - name: repo
+      description: Repository, for example platform/pipelines/go-service
+    - name: tag
+      description: Tag to push
+    - name: resource
+      description: File in the sources workspace to publish
+  workspaces:
+    - name: sources
+      description: The resource files and push-bundle.py
+  results:
+    - name: IMAGE_URL
+      description: Repository of the pushed bundle (type hint for Tekton Chains)
+    - name: IMAGE_DIGEST
+      description: Digest of the pushed bundle (type hint for Tekton Chains)
+  steps:
+    - name: push
+      image: python:3.12-alpine
+      workingDir: $(workspaces.sources.path)
+      script: |
+        #!/bin/sh
+        set -eu
+        ref="$(python3 push-bundle.py "$(params.registry)" "$(params.repo)" "$(params.tag)" "$(params.resource)")"
+        printf '%s' "${ref%@*}"   > "$(results.IMAGE_URL.path)"
+        printf '%s' "${ref##*@}"  > "$(results.IMAGE_DIGEST.path)"
+        echo "pushed ${ref}"

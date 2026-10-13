@@ -1,0 +1,18 @@
+# Single-node kind cluster.
+#
+# extraPortMappings is REQUIRED on macOS: the kind node IP lives inside the
+# Docker VM and is not routable from the host (kind docs, "Known Issues ->
+# Docker Desktop for macOS"). The mappings publish the ingress ports on
+# 127.0.0.1, so the same hostname works from the host and from the pods.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: sovereign-ci
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      - containerPort: 80
+        hostPort: 80
+        protocol: TCP
+      - containerPort: 443
+        hostPort: 443
+        protocol: TCP

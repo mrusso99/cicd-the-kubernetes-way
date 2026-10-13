@@ -1,0 +1,51 @@
+# The platform publishes the golden path with its own pipeline.
+#
+# Chains watches the run, reads the bundle digest out of the IMAGE_URL /
+# IMAGE_DIGEST results and signs that artifact in the registry — with the same
+# key that signs the provenance of every team build.
+#
+# scripts/publish.sh substitutes ZOT_HOST, waits for the signature and verifies
+# it before approving the digest for admission.
+apiVersion: tekton.dev/v1
+kind: PipelineRun
+metadata:
+  generateName: publish-golden-path-
+  namespace: platform
+  labels:
+    platform.demo/publisher: "true"
+spec:
+  taskRunTemplate:
+    serviceAccountName: platform-publisher
+  pipelineSpec:
+    params:
+      - name: registry
+    workspaces:
+      - name: sources
+    results:
+      - name: IMAGE_URL
+        value: $(tasks.publish.results.IMAGE_URL)
+      - name: IMAGE_DIGEST
+        value: $(tasks.publish.results.IMAGE_DIGEST)
+    tasks:
+      - name: publish
+        taskRef:
+          name: publish-bundle
+        params:
+          - name: registry
+            value: $(params.registry)
+          - name: repo
+            value: platform/pipelines/go-service
+          - name: tag
+            value: "1.0.0"
+          - name: resource
+            value: go-service.yaml
+        workspaces:
+          - name: sources
+            workspace: sources
+  params:
+    - name: registry
+      value: ZOT_HOST
+  workspaces:
+    - name: sources
+      configMap:
+        name: publish-sources

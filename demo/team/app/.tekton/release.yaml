@@ -1,0 +1,51 @@
+# Example 1 — the team releases with the platform's **signed** bundle.
+#
+# This is the entire CI definition a team owns: which published bundle to run,
+# the parameters Pipelines-as-Code fills in, and the workspace. Pipelines-as-Code
+# turns it into a PipelineRun on every push to `main`.
+#
+#   make example-1     pushes this file and follows the run
+#
+# `make example-1b` pushes the same thing on the `scan-fail` branch together with
+# an old, vulnerable Dockerfile, to show what happens when the Trivy gate fails.
+#
+# BUNDLE_REF and ZOT_HOST are substituted by demo/scripts/example.sh.
+apiVersion: tekton.dev/v1
+kind: PipelineRun
+metadata:
+  name: release
+  annotations:
+    pipelinesascode.tekton.dev/on-event: "[push]"
+    pipelinesascode.tekton.dev/on-target-branch: "[main]"
+spec:
+  pipelineRef:
+    resolver: bundles
+    params:
+      - name: bundle
+        value: BUNDLE_REF
+      - name: name
+        value: go-service
+      - name: kind
+        value: Pipeline
+  params:
+    - name: repo-url
+      value: "{{ repo_url }}"
+    - name: revision
+      value: "{{ revision }}"
+    - name: image
+      value: ZOT_HOST/team/app
+  workspaces:
+    - name: source
+      # shared across the tasks of this run: clone writes, build and scan read
+      volumeClaimTemplate:
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 1Gi
+    - name: git-auth
+      # the build's own git identity (tekton-svc), not the PaC bot
+      secret:
+        secretName: team-git-auth
+  taskRunTemplate:
+    serviceAccountName: team-app

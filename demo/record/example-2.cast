@@ -1,0 +1,9 @@
+{"version":3,"term":{"cols":120,"rows":20},"timestamp":1790596909,"idle_time_limit":1.0,"command":"printf '\\033[1;36m$ make example-2\\033[0m\\n'; make example-2","env":{"SHELL":"/bin/bash"}}
+[0.076, "o", "\u001b[1;36m$ make example-2\u001b[0m\r\n"]
+[0.297, "o", "\u001b[1;36m▸ Policy: no team pod may run as root\u001b[0m\r\n"]
+[0.096, "o", "\u001b[1;36m▸ Policy: entitlement violations are denied (approved zot.127-0-0-1.sslip.io/platform/pipelines/go-service@sha256:77cb7849b863…)\u001b[0m\r\n"]
+[0.176, "o", "\u001b[1;36m▸ Cloning acme/app as the developer\u001b[0m\r\n"]
+[1.220, "o", "\u001b[1;36m▸ Pushed unsigned: .tekton/release.yaml -> zot.127-0-0-1.sslip.io/platform/pipelines/go-service@sha256:3b5a5d1575fc…\u001b[0m\r\n"]
+[2.490, "o", "\u001b[1;36m▸ no PipelineRun was created: the request was rejected at admission\u001b[0m\r\n"]
+[0.067, "o", "  Tekton Controller has reported this error: ```pipelineruns.tekton.dev \"release-unsigned-hm2d2\" is forbidden: ValidatingAdmissionPolicy 'tekton-bundle-entitlement' with binding 'tekton-bundle-entitlement-deny' denied request: bundle non approvato: la piattaforma ha approvato solo zot.127-0-0-1.sslip.io/platform/pipelines/go-service@sha256:77cb7849b863… (firmato da Tekton Chains)``` \r\n\u001b[1;32m✔ example 2: the unsigned bundle never became a run\u001b[0m\r\n"]
+[0.051, "x", "0"]

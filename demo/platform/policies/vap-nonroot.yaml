@@ -1,0 +1,69 @@
+# Admission control: nothing a team starts may run as root.
+#
+# The bundle policy (vap-entitlement.yaml) guards *what* a team may run; this one
+# guards *as whom*.
+#
+# Enforced on the Pod, not on the PipelineRun, on purpose: root is a property of
+# the pod spec, and this way the refusal is a *failed run* — visible in the
+# Dashboard and on the commit — instead of a rejected object that leaves no
+# trace in Tekton.
+#
+# What it refuses, in a namespace labelled platform.demo/team=true:
+#   * securityContext.runAsUser == 0, at pod, init-container or container level
+#   * securityContext.runAsNonRoot == false, at the same levels
+#
+# A pod that says nothing about its user is left to the namespace's Pod Security
+# Admission: this policy refuses an *explicit* root request, which is what the
+# demo shows. A full "non-root only" namespace is Pod Security Admission
+# `restricted`, but that also forbids the Unconfined seccomp profile the rootless
+# buildkit worker needs (see the README).
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: tekton-non-root
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE"]
+        resources: ["pods"]
+  validations:
+    - expression: |
+        !(has(object.spec.securityContext) &&
+          has(object.spec.securityContext.runAsUser) &&
+          object.spec.securityContext.runAsUser == 0)
+      message: "pod non ammesso: runAsUser 0 (root) è vietato nelle pipeline dei team"
+      reason: Forbidden
+    - expression: |
+        !(has(object.spec.securityContext) &&
+          has(object.spec.securityContext.runAsNonRoot) &&
+          object.spec.securityContext.runAsNonRoot == false)
+      message: "pod non ammesso: runAsNonRoot false è vietato nelle pipeline dei team"
+      reason: Forbidden
+    - expression: |
+        object.spec.containers.all(c,
+          !(has(c.securityContext) && has(c.securityContext.runAsUser) && c.securityContext.runAsUser == 0) &&
+          !(has(c.securityContext) && has(c.securityContext.runAsNonRoot) && c.securityContext.runAsNonRoot == false))
+      message: "pod non ammesso: un container chiede di girare come root"
+      reason: Forbidden
+    - expression: |
+        !has(object.spec.initContainers) ||
+        object.spec.initContainers.all(c,
+          !(has(c.securityContext) && has(c.securityContext.runAsUser) && c.securityContext.runAsUser == 0) &&
+          !(has(c.securityContext) && has(c.securityContext.runAsNonRoot) && c.securityContext.runAsNonRoot == false))
+      message: "pod non ammesso: un init container chiede di girare come root"
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: tekton-non-root-deny
+spec:
+  policyName: tekton-non-root
+  validationActions: ["Deny"]
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        platform.demo/team: "true"

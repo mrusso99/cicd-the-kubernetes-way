@@ -1,0 +1,37 @@
+# zot: OCI-native registry — images, signed pipeline bundles, Chains
+# attestations (OCI 1.1 referrers API). Ingress host injected by the Makefile.
+service:
+  type: ClusterIP
+
+ingress:
+  enabled: true
+  className: haproxy
+  annotations: {}
+  hosts:
+    - host: zot.invalid
+      paths:
+        - path: /
+          pathType: Prefix
+
+persistence: true
+pvc:
+  create: true
+  storage: 8Gi
+
+mountConfig: true
+configFiles:
+  config.json: |-
+    {
+      "storage": { "rootDirectory": "/var/lib/registry" },
+      "http": {
+        "address": "0.0.0.0",
+        "port": "5000",
+        "readTimeout": "60s",
+        "writeTimeout": "60s"
+      },
+      "log": { "level": "info" },
+      "extensions": {
+        "search": { "enable": true },
+        "ui": { "enable": true }
+      }
+    }

@@ -1,0 +1,37 @@
+# HAProxy Kubernetes Ingress Controller on kind.
+#
+# kind publishes the node's 80/443 on the host, so the controller has to bind those
+# ports *on the node*: a DaemonSet with host ports, and no Service needed. This
+# replaces ingress-nginx, which the project has retired.
+controller:
+  kind: DaemonSet
+  daemonset:
+    useHostPort: true
+
+  # Nothing routes through the Service: the node's ports are the entry point.
+  service:
+    enabled: false
+
+  ingressClass: haproxy
+  ingressClassResource:
+    name: haproxy
+    default: true
+
+  config:
+    # The registry ingress has a TLS section, and this controller redirects HTTP to
+    # HTTPS by default for any such ingress — to port 8443, which nothing serves on
+    # the host. The demo's tooling talks plain HTTP to the registry on purpose
+    # (buildkit, cosign, push-bundle.py), so the redirect is off.
+    ssl-redirect: "false"
+    # Image layers and git clones go through this ingress; HAProxy's defaults would
+    # cut a slow push.
+    timeout-client: "600s"
+    timeout-server: "600s"
+    timeout-connect: "10s"
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 512Mi

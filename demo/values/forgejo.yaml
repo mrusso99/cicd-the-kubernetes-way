@@ -1,0 +1,39 @@
+# Forgejo for the demo: sqlite, no HA dependencies, rootless image.
+# The hostname (ingress host + ROOT_URL + DOMAIN) is injected by the Makefile
+# from versions.env, so the name lives in exactly one place.
+strategy:
+  type: Recreate
+
+persistence:
+  enabled: true
+  size: 5Gi
+
+service:
+  ssh:
+    type: ClusterIP
+
+ingress:
+  enabled: true
+  className: haproxy
+  hosts:
+    - host: forgejo.invalid
+      paths:
+        - path: /
+          pathType: Prefix
+
+gitea:
+  admin:
+    username: forgejo_admin
+    password: sovereign-demo-42
+    email: admin@demo.invalid
+    passwordMode: keepUpdated
+  config:
+    APP_NAME: "Forgejo — sovereign forge"
+    server:
+      DISABLE_REGISTRATION: true
+    webhook:
+      # default is "external": Forgejo would refuse to POST to the
+      # cluster-internal PaC controller address
+      ALLOWED_HOST_LIST: "*"
+    actions:
+      ENABLED: false

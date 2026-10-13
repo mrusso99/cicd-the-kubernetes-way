@@ -1,0 +1,55 @@
+# Example 3 — the team starts the platform's signed pipeline as **root**.
+#
+# The bundle is the approved, signed one; the only difference is the pod
+# template. The PipelineRun is admitted, so the run exists and fails — the non-root
+# ValidatingAdmissionPolicy refuses the *pod*, and the failure is what you see in
+# the Dashboard and on the commit.
+#
+#   make example-3     pushes this file and shows the failure
+#
+# PaC passes `taskRunTemplate.podTemplate` straight through to Tekton, so this is
+# the one field a team can use to ask for root without touching a Task or Pipeline
+# definition.
+#
+# BUNDLE_REF and ZOT_HOST are substituted by demo/scripts/example.sh.
+apiVersion: tekton.dev/v1
+kind: PipelineRun
+metadata:
+  name: release-as-root
+  annotations:
+    pipelinesascode.tekton.dev/on-event: "[push]"
+    pipelinesascode.tekton.dev/on-target-branch: "[as-root]"
+spec:
+  pipelineRef:
+    resolver: bundles
+    params:
+      - name: bundle
+        value: BUNDLE_REF
+      - name: name
+        value: go-service
+      - name: kind
+        value: Pipeline
+  params:
+    - name: repo-url
+      value: "{{ repo_url }}"
+    - name: revision
+      value: "{{ revision }}"
+    - name: image
+      value: ZOT_HOST/team/app
+  workspaces:
+    - name: source
+      volumeClaimTemplate:
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 1Gi
+    - name: git-auth
+      secret:
+        secretName: team-git-auth
+  taskRunTemplate:
+    serviceAccountName: team-app
+    podTemplate:
+      # the whole attack: ask for uid 0 in the pod that runs the build
+      securityContext:
+        runAsUser: 0
